@@ -696,9 +696,9 @@
     let fbAuth = null;
     let fbApp = null;
 
-    const API_KEY = "AIzaSyD2xDDEwGEJ_86vHxBHPzhQLcWinXUREIc";
-    const WORKER = "https://api-bazar.norges763.workers.dev";
-    const FS = "https://firestore.googleapis.com/v1/projects/bazarcuba/databases/(default)/documents";
+    const API_KEY = "AIzaSyBSzMnZ1nc0NoUOug7guZN0o3cGby3qlao";
+    const WORKER = "https://pruebadebazar.norges763.workers.dev";
+    const FS = "https://firestore.googleapis.com/v1/projects/prueba-de-bazar/databases/(default)/documents";
     
 
     // ============================================================
@@ -866,7 +866,7 @@
         if (fbAuth) return fbAuth;
         const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js");
         const { getAuth } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
-        if (!fbApp) fbApp = initializeApp({ apiKey: API_KEY, authDomain: "bazarcuba.firebaseapp.com", projectId: "bazarcuba", appId: "1:341288499673:web:ca566add302596869d01c8" });
+        if (!fbApp) fbApp = initializeApp({ apiKey: API_KEY, authDomain: "prueba-de-bazar.firebaseapp.com", projectId: "prueba-de-bazar", appId: "1:256936443858:web:d39bed69175b0211d6520b" });
         fbAuth = getAuth(fbApp);
         return fbAuth;
     }
@@ -1047,7 +1047,7 @@
         if (!input || !pass) { await showMsg('Completa todos los campos.', 'warning'); return; }
         btn.innerText = 'Conectando...'; btn.disabled = true;
         // Si contiene @ es un correo real, si no es username@bazarcuba.app
-        const email = input.includes('@') ? input : input.toLowerCase().replace(/\s+/g,'') + '@bazarcuba.app';
+        const email = input.includes('@') ? input : input.toLowerCase().replace(/\s+/g,'') + '@prueba-de-bazar.app';
         try {
             const { signInWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
             const auth = await iniciarFB();
@@ -1081,7 +1081,7 @@
         if (pass.length < 6) { await showMsg('La contraseña debe tener al menos 6 caracteres.', 'warning'); return; }
         const btn = document.getElementById('btn-auth-accion');
         btn.innerText = 'Creando cuenta...'; btn.disabled = true;
-        const email = username + '@bazarcuba.app';
+        const email = username + '@prueba-de-bazar.app';
         try {
             const { createUserWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
             const auth = await iniciarFB();
@@ -2934,18 +2934,49 @@
         } catch(e) { await showMsg('❌ ' + e.message, 'error'); btn.innerText = '💾 Guardar Info de Tienda'; btn.disabled = false; }
     };
 
+    // Extrae el public_id de una URL de Cloudinary
+    function cloudinaryPublicId(url) {
+        if (!url || !url.includes('cloudinary.com')) return null;
+        // https://res.cloudinary.com/CLOUD/image/upload/v123/FOLDER/FILE.jpg → FOLDER/FILE
+        const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-z]+$/i);
+        return match ? match[1] : null;
+    }
+
     window.borrarAnuncio = async function(id) {
         if (!usuarioUID) { await showMsg('Inicia sesión con VPN para eliminar.', 'warning', () => borrarAnuncio(id)); return; }
         const esPadre = tiendasData.some(t => t.productoPadreId === id);
         const msg = esPadre
-            ? '¿Seguro que quieres eliminar este producto y todos sus subproductos?'
-            : '¿Seguro que quieres eliminar este producto?';
+            ? '¿Seguro que quieres eliminar este producto y todos sus subproductos?\n\nLas fotos también se borrarán de Cloudinary.'
+            : '¿Seguro que quieres eliminar este producto?\n\nLas fotos también se borrarán de Cloudinary.';
         if (!await showConfirm(msg)) return;
         showLoading();
         try {
             const token = await getToken();
-            // Borrar subproductos primero si los hay
             const subs = tiendasData.filter(t => t.productoPadreId === id);
+            const todosABorrar = [id, ...subs.map(s => s.id)];
+
+            // Recopilar todos los public_ids de Cloudinary
+            const publicIds = [];
+            for (const pid of todosABorrar) {
+                const prod = tiendasData.find(t => t.id === pid);
+                if (prod && prod.fotos) {
+                    for (const url of prod.fotos) {
+                        const pubId = cloudinaryPublicId(url);
+                        if (pubId) publicIds.push(pubId);
+                    }
+                }
+            }
+
+            // Borrar fotos en Cloudinary via Worker (en paralelo al borrado de Firestore)
+            if (publicIds.length) {
+                fetch(`${WORKER}/borrar-fotos`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ publicIds })
+                }).catch(() => {}); // no bloquear si falla
+            }
+
+            // Borrar subproductos de Firestore
             for (const sub of subs) {
                 let rs = await fetch(`${FS}/tiendas/${sub.id}?key=${API_KEY}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
                 if (rs.status === 403 || rs.status === 401) {
@@ -2955,7 +2986,8 @@
                 tiendasData = tiendasData.filter(t => t.id !== sub.id);
                 guardarCambioLocal(sub.id, null);
             }
-            // Borrar el padre
+
+            // Borrar el padre de Firestore
             let r = await fetch(`${FS}/tiendas/${id}?key=${API_KEY}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
             if (r.status === 403 || r.status === 401) {
                 const token2 = await fbAuth.currentUser.getIdToken(true);
@@ -2967,7 +2999,7 @@
                 hideLoading();
                 cerrarEdicion();
                 renderizarMisProductos(tiendasData.filter(t => t.uidVendedor === usuarioUID));
-                await showMsg('✅ Producto eliminado.' + (subs.length ? `\n${subs.length} subproducto${subs.length>1?'s':''} también eliminado${subs.length>1?'s':''}.` : ''), 'ok');
+                await showMsg('✅ Producto eliminado.' + (subs.length ? `\n${subs.length} subproducto${subs.length>1?'s':''} también eliminado${subs.length>1?'s':''}.` : '') + (publicIds.length ? `\n🗑️ ${publicIds.length} foto${publicIds.length>1?'s':''} borrada${publicIds.length>1?'s':''} de Cloudinary.` : ''), 'ok');
             } else { hideLoading(); await showMsg('❌ ' + await r.text(), 'error'); }
         } catch(e) { hideLoading(); await msgError(e); }
     };
