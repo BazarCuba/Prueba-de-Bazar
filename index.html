@@ -453,6 +453,27 @@
 </div>
 <div id="var-popup-overlay" onclick="cerrarPopupVariantes()" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;z-index:7999;"></div>
 
+<!-- MODAL BIENVENIDA PRUEBA -->
+<div id="modal-bienvenida" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:20000;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:20px;padding:28px 22px;max-width:320px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+        <div style="font-size:48px;margin-bottom:12px;">🎉</div>
+        <h2 style="margin:0 0 10px;color:#0056b3;font-size:18px;">¡Bienvenido a BazarCuba!</h2>
+        <p style="color:#444;font-size:14px;margin:0 0 16px;line-height:1.5;">Podrás usar tu tienda <strong>gratuitamente por 5 minutos</strong> para explorar la plataforma.</p>
+        <p style="color:#888;font-size:12px;margin:0 0 20px;">Pasado ese tiempo, deberás realizar el pago mensual para mantener tu tienda activa.</p>
+        <button onclick="cerrarBienvenida()" style="width:100%;padding:12px;background:linear-gradient(135deg,#0056b3,#003d82);color:white;border:none;border-radius:12px;font-size:15px;font-weight:bold;cursor:pointer;">¡Entendido, empezar! ⏱️</button>
+    </div>
+</div>
+
+<!-- PANTALLA TIENDA BLOQUEADA -->
+<div id="pantalla-bloqueada" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:19000;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:20px;padding:28px 22px;max-width:320px;width:90%;text-align:center;">
+        <div style="font-size:48px;margin-bottom:12px;">🔒</div>
+        <h2 style="margin:0 0 10px;color:#d32f2f;font-size:17px;">Tienda bloqueada temporalmente</h2>
+        <p style="color:#555;font-size:13px;line-height:1.5;margin:0 0 16px;">Su tienda ha sido bloqueada temporalmente por incumplir con el pago.<br><br>Para reactivarla, realice el pago y contacte al administrador.</p>
+        <button onclick="document.getElementById('pantalla-bloqueada').style.display='none';document.getElementById('panelVendedor').style.display='none';" style="width:100%;padding:11px;background:#0056b3;color:white;border:none;border-radius:12px;font-size:14px;font-weight:bold;cursor:pointer;">Volver al catálogo</button>
+    </div>
+</div>
+
 <div id="menu-dots" onclick="toggleMenu()">⋮</div>
 
 <div id="side-menu">
@@ -860,6 +881,8 @@
                 } catch(e) { /* Sin VPN, silencioso */ }
             });
         }
+        // Iniciar verificación periódica de suscripción
+        if (!esAdmin()) iniciarCheckSuscripcion();
     }
 
     async function iniciarFB() {
@@ -1105,7 +1128,11 @@
             actualizarUI(true);
             document.getElementById('auth-container').style.display = 'none';
             document.getElementById('opciones-auth').style.display = 'none';
-            await showMsg('✅ ¡Cuenta creada! Bienvenido a BazarCuba 🇨🇺', 'ok');
+            toggleMenu();
+            // Iniciar timer de suscripción y mostrar bienvenida
+            await iniciarTimerSuscripcion(usuarioUID);
+            document.getElementById('modal-bienvenida').style.display = 'flex';
+            iniciarCheckSuscripcion();
             renderizar(tiendasData);
         } catch(e) {
             let msg = 'No se pudo crear la cuenta. ';
@@ -2999,7 +3026,7 @@
                 hideLoading();
                 cerrarEdicion();
                 renderizarMisProductos(tiendasData.filter(t => t.uidVendedor === usuarioUID));
-                await showMsg('✅ Producto eliminado.' + (subs.length ? `\n${subs.length} subproducto${subs.length>1?'s':''} también eliminado${subs.length>1?'s':''}.` : '') + (publicIds.length ? `\n🗑️ ${publicIds.length} foto${publicIds.length>1?'s':''} borrada${publicIds.length>1?'s':''} de Cloudinary.` : ''), 'ok');
+                await showMsg('✅ Producto eliminado.' + (subs.length ? `\n${subs.length} subproducto${subs.length>1?'s':''} también eliminado${subs.length>1?'s':''}.` : ''), 'ok');
             } else { hideLoading(); await showMsg('❌ ' + await r.text(), 'error'); }
         } catch(e) { hideLoading(); await msgError(e); }
     };
@@ -3393,7 +3420,6 @@
         } else {
             grid.innerHTML = '';
             subs.forEach(t => {
-                // Si la variante no tiene fotos propias, usar las del padre
                 const fotos = (t.fotos && t.fotos.length > 0) ? t.fotos : (padre.fotos || []);
                 const fe = encodeURIComponent(JSON.stringify(fotos));
                 const ns2 = (t.nombre||'Sin nombre').replace(/'/g,"\'").replace(/"/g,'&quot;');
@@ -3401,37 +3427,34 @@
                 const ag = t.estado === 'agotado';
                 const tel2 = (t.tel||'').replace(/[^0-9]/g,'');
                 let fotosHtml = fotos.map((foto, idx) =>
-                    `<img src="${foto}" class="carousel-img ${idx===0?'active':''}" onclick="abrirLightbox('${fe}',${idx})">`
+                    '<img src="'+foto+'" class="carousel-img '+(idx===0?'active':'')+'" onclick="abrirLightbox(\''+fe+'\','+idx+')">'
                 ).join('');
-                const ctrlHtml = fotos.length > 1
-                    ? `<div class="foto-counter" id="counter-sub-${t.id}">1/${fotos.length}</div>`
-                    : '';
-                const esVariante = t.esVariante;
+                const ctrlHtml = fotos.length > 1 ? '<div class="foto-counter" id="counter-sub-'+t.id+'">1/'+fotos.length+'</div>' : '';
+                const badgeAgotado = ag ? '<div class="badge-agotado">AGOTADO</div>' : '';
+                const badgeFoto = t.usaFotosPadre ? '<div style="position:absolute;bottom:6px;left:8px;background:rgba(0,0,0,0.5);color:white;font-size:9px;padding:2px 6px;border-radius:10px;">📸 foto del producto</div>' : '';
+                const descBtn = t.descripcion ? '<button class="btn-descripcion" onclick="abrirDesc(this.dataset.n,this.dataset.d)" data-n="'+ns2+'" data-d="'+ds2+'" style="flex-shrink:0;">'+svgDoc+'</button>' : '';
+                const monedaHtml = t.moneda ? '<span class="moneda-tag">'+t.moneda+'</span>' : '';
+                const carritoHtml = !ag ? '<button onclick="agregarAlCarrito(\''+t.id+'\')" title="Agregar al carrito" style="margin-left:auto;background:#e8f4fd;border:none;cursor:pointer;font-size:16px;padding:5px 9px;border-radius:10px;">&#128722;</button>' : '<span style="margin-left:auto;"></span>';
+                const mapaBtn = ag ? '<button class="btn-mapa-card btn-disabled">'+svgGPS+'</button>' : '<button class="btn-mapa-card" onclick="verUbicacion('+t.lat+','+t.lng+',\''+ns2+'\')">'+svgGPS+'</button>';
                 const card = document.createElement('div');
                 card.className = 'card';
                 card.id = 'card-' + t.id;
                 card.style.opacity = ag ? '0.65' : '1';
-                card.innerHTML = `
-                    <div class="carousel-container" data-id="${t.id}">
-                        ${fotosHtml}${ctrlHtml}
-                        ${ag ? '<div class="badge-agotado">AGOTADO</div>' : ''}
-                        ${t.usaFotosPadre ? '<div style="position:absolute;bottom:6px;left:8px;background:rgba(0,0,0,0.5);color:white;font-size:9px;padding:2px 6px;border-radius:10px;">📸 foto del producto</div>' : ''}
-                    </div>
-                    <div style="display:flex;align-items:center;gap:4px;padding:0 8px;margin:6px 0 2px;">
-                        <h3 style="margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#222;">${t.nombre||'Sin nombre'}</h3>
-                        ${t.descripcion ? `<button class="btn-descripcion" onclick="abrirDesc(this.dataset.n,this.dataset.d)" data-n="${ns2}" data-d="${ds2}" style="flex-shrink:0;">${svgDoc}</button>` : ''}
-                    </div>
-                    <div class="precio-row">
-                        <span class="precio-tag">${t.precio}</span>
-                        ${t.moneda ? '<span class="moneda-tag">'+t.moneda+'</span>' : ''}
-                        ${!ag ? `<button onclick="agregarAlCarrito('${t.id}')" title="Agregar al carrito" style="margin-left:auto;background:#e8f4fd;border:none;cursor:pointer;font-size:16px;padding:5px 9px;border-radius:10px;">&#128722;</button>` : '<span style="margin-left:auto;"></span>'}
-                    </div>
-                    <p class="provincia">&#128205; ${t.provincia}</p>
-                    <div class="card-buttons">
-                        <a href="${ag ? '' : 'tel:'+t.tel}" class="btn-llamar${ag?' btn-disabled':''}" ${ag?'onclick="return false"':''}>${svgTel}</a>
-                        <a href="${ag ? '' : 'https://wa.me/'+tel2}" ${ag?'':'target="_blank"'} class="btn-wa${ag?' btn-disabled':''}" ${ag?'onclick="return false"':''}>${svgWA}</a>
-                        <button class="btn-mapa-card${ag?' btn-disabled':''}" ${ag?'':` onclick="verUbicacion(${t.lat},${t.lng},'${ns2}')"`}>${svgGPS}</button>
-                    </div>`;
+                card.innerHTML =
+                    '<div class="carousel-container" data-id="'+t.id+'">'+fotosHtml+ctrlHtml+badgeAgotado+badgeFoto+'</div>'+
+                    '<div style="display:flex;align-items:center;gap:4px;padding:0 8px;margin:6px 0 2px;">'+
+                        '<h3 style="margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#222;">'+(t.nombre||'Sin nombre')+'</h3>'+
+                        descBtn+
+                    '</div>'+
+                    '<div class="precio-row">'+
+                        '<span class="precio-tag">'+t.precio+'</span>'+monedaHtml+carritoHtml+
+                    '</div>'+
+                    '<p class="provincia">&#128205; '+t.provincia+'</p>'+
+                    '<div class="card-buttons">'+
+                        '<a href="'+(ag?'':'tel:'+t.tel)+'" class="btn-llamar'+(ag?' btn-disabled':'')+'" '+(ag?'onclick="return false"':'')+'>'+svgTel+'</a>'+
+                        '<a href="'+(ag?'':'https://wa.me/'+tel2)+'" '+(ag?'':'target="_blank"')+' class="btn-wa'+(ag?' btn-disabled':'')+'" '+(ag?'onclick="return false"':'')+'>'+svgWA+'</a>'+
+                        mapaBtn+
+                    '</div>';
                 grid.appendChild(card);
             });
         }
@@ -3633,6 +3656,7 @@
                                 <button class="btn-admin-activar" onclick="adminSetSuscripcion('${v.uid}','activo')">✅ Activar</button>
                                 <button class="btn-admin-vencer" onclick="adminSetSuscripcion('${v.uid}','vencido')">❌ Vencer</button>
                                 <button class="btn-admin-renovar" onclick="adminRenovar('${v.uid}')">🔄 +30d</button>
+                                <button onclick="adminPagado('${v.uid}')" style="background:linear-gradient(135deg,#00b09b,#00695c);color:white;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:bold;cursor:pointer;">⏱️ Pagado</button>
                                 <button style="background:#30363d;color:#e6edf3;" onclick="adminNota('${v.uid}')">📝 Nota</button>
                             </div>
                         </div>`;
@@ -3673,6 +3697,31 @@
                 }})
             });
             toast('✅ Renovado hasta ' + venc);
+            cargarPanelAdmin();
+        } catch(e) { await showMsg('❌ ' + e.message, 'error'); }
+    };
+
+    window.adminPagado = async function(uid) {
+        try {
+            const token = await getToken();
+            // Buscar el doc del vendedor
+            const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await rList.json();
+            const doc = (data.documents || []).find(d => d.fields?.uid?.stringValue === uid);
+            if (!doc) { toast('❌ Usuario no encontrado'); return; }
+            const docId = doc.name.split('/').pop();
+            const nuevaVence = new Date(Date.now() + TIEMPO_PRUEBA_MS).toISOString();
+            await fetch(`${FS}/vendedores/${docId}?updateMask.fieldPaths=suscripcionVence&updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ fields: {
+                    suscripcionVence: { stringValue: nuevaVence },
+                    suscripcionEstado: { stringValue: 'pagado' }
+                }})
+            });
+            toast('✅ Timer reiniciado — 5 min nuevos');
             cargarPanelAdmin();
         } catch(e) { await showMsg('❌ ' + e.message, 'error'); }
     };
@@ -3784,6 +3833,148 @@
             const s = el.scrollHeight > el.clientHeight + 2;
             if (s) el.dispatchEvent(new Event('scroll'));
         });
+    }
+
+    // ============================================================
+    // SISTEMA DE SUSCRIPCIÓN — PRUEBA 5 MINUTOS
+    // ============================================================
+    const TIEMPO_PRUEBA_MS = 5 * 60 * 1000;   // 5 min → bloqueo
+    const TIEMPO_BORRADO_MS = 10 * 60 * 1000; // 10 min → borrado automático
+    let _suscripcionInterval = null;
+
+    window.cerrarBienvenida = function() {
+        document.getElementById('modal-bienvenida').style.display = 'none';
+    };
+
+    // Iniciar timer al registrarse: guarda suscripcionVence en vendedores
+    async function iniciarTimerSuscripcion(uid) {
+        const vence = new Date(Date.now() + TIEMPO_PRUEBA_MS).toISOString();
+        try {
+            const token = await getToken();
+            // Buscar el doc del vendedor (por uid en el nombre del doc)
+            const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!rList.ok) return;
+            const data = await rList.json();
+            const doc = (data.documents || []).find(d => {
+                const f = d.fields || {};
+                return f.uid?.stringValue === uid;
+            });
+            if (!doc) return;
+            const docId = doc.name.split('/').pop();
+            await fetch(`${FS}/vendedores/${docId}?updateMask.fieldPaths=suscripcionVence&updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ fields: {
+                    suscripcionVence: { stringValue: vence },
+                    suscripcionEstado: { stringValue: 'activo' }
+                }})
+            });
+        } catch(e) { console.error('iniciarTimerSuscripcion:', e); }
+    }
+
+    // Verificar estado de suscripción del usuario actual
+    async function verificarSuscripcion() {
+        if (!usuarioUID) return;
+        if (esAdmin()) return; // admin nunca se bloquea
+        try {
+            const token = await getToken();
+            const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!rList.ok) return;
+            const data = await rList.json();
+            const doc = (data.documents || []).find(d => (d.fields?.uid?.stringValue === usuarioUID));
+            if (!doc) return;
+            const f = doc.fields || {};
+            const estado = f.suscripcionEstado?.stringValue || 'activo';
+            const venceStr = f.suscripcionVence?.stringValue;
+            if (!venceStr) return;
+
+            const vence = new Date(venceStr).getTime();
+            const ahora = Date.now();
+            const docId = doc.name.split('/').pop();
+
+            if (estado === 'pagado') return; // admin ya pagó, no hacer nada
+
+            if (ahora >= vence + TIEMPO_PRUEBA_MS) {
+                // Pasaron 10 min → borrar tienda y productos
+                await borrarTiendaAutomatica(docId);
+            } else if (ahora >= vence) {
+                // Pasaron 5 min → bloquear
+                await bloquearTienda(docId);
+            }
+        } catch(e) { console.error('verificarSuscripcion:', e); }
+    }
+
+    async function bloquearTienda(vendedorDocId) {
+        // Marcar como bloqueado en Firestore
+        try {
+            const token = await getToken();
+            await fetch(`${FS}/vendedores/${vendedorDocId}?updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ fields: { suscripcionEstado: { stringValue: 'bloqueado' } } })
+            });
+        } catch(e) {}
+        // Mostrar pantalla de bloqueo si está en panel vendedor
+        const panelVisible = document.getElementById('panelVendedor').style.display !== 'none';
+        if (panelVisible) {
+            document.getElementById('pantalla-bloqueada').style.display = 'flex';
+        }
+        // Deshabilitar botón "Añadir tienda"
+        const btnAddTienda = document.getElementById('btn-add-negocio');
+        if (btnAddTienda) {
+            btnAddTienda.disabled = true;
+            btnAddTienda.style.opacity = '0.4';
+            btnAddTienda.title = 'Tu tienda está bloqueada';
+        }
+    }
+
+    async function borrarTiendaAutomatica(vendedorDocId) {
+        try {
+            const token = await getToken();
+            // Borrar todos los productos del usuario
+            const misProds = tiendasData.filter(t => t.uidVendedor === usuarioUID);
+            // Recopilar public_ids de Cloudinary
+            const publicIds = [];
+            for (const prod of misProds) {
+                (prod.fotos || []).forEach(url => {
+                    const pid = cloudinaryPublicId(url);
+                    if (pid) publicIds.push(pid);
+                });
+                await fetch(`${FS}/tiendas/${prod.id}?key=${API_KEY}`, {
+                    method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(() => {});
+            }
+            // Borrar fotos en Cloudinary
+            if (publicIds.length) {
+                fetch(`${WORKER}/borrar-fotos`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ publicIds })
+                }).catch(() => {});
+            }
+            // Marcar vendedor como borrado
+            await fetch(`${FS}/vendedores/${vendedorDocId}?updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ fields: { suscripcionEstado: { stringValue: 'borrado' } } })
+            });
+            // Limpiar de tiendasData
+            tiendasData = tiendasData.filter(t => t.uidVendedor !== usuarioUID);
+            renderizar(tiendasData);
+            // Cerrar panel y limpiar sesión local
+            document.getElementById('panelVendedor').style.display = 'none';
+            clearInterval(_suscripcionInterval);
+        } catch(e) { console.error('borrarTiendaAutomatica:', e); }
+    }
+
+    function iniciarCheckSuscripcion() {
+        if (_suscripcionInterval) clearInterval(_suscripcionInterval);
+        verificarSuscripcion();
+        _suscripcionInterval = setInterval(verificarSuscripcion, 30 * 1000); // cada 30 segundos
     }
 
     detectarDirecto();
