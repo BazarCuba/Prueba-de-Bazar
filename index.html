@@ -3653,11 +3653,8 @@
                                 ${sus.notas ? '<br>📝 '+sus.notas : ''}
                             </div>
                             <div class="admin-vendedor-btns">
-                                <button class="btn-admin-activar" onclick="adminSetSuscripcion('${v.uid}','activo')">✅ Activar</button>
-                                <button class="btn-admin-vencer" onclick="adminSetSuscripcion('${v.uid}','vencido')">❌ Vencer</button>
-                                <button class="btn-admin-renovar" onclick="adminRenovar('${v.uid}')">🔄 +30d</button>
-                                <button onclick="adminPagado('${v.uid}')" style="background:linear-gradient(135deg,#00b09b,#00695c);color:white;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:bold;cursor:pointer;">⏱️ Pagado</button>
-                                <button style="background:#30363d;color:#e6edf3;" onclick="adminNota('${v.uid}')">📝 Nota</button>
+                                <button onclick="adminPagado('${v.uid}','${v.username}')" style="background:linear-gradient(135deg,#00b09b,#00695c);color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;cursor:pointer;">⏱️ Pagado</button>
+                                <button onclick="adminEliminarUsuario('${v.uid}','${v.username}')" style="background:#b91c1c;color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:bold;cursor:pointer;">🗑️ Eliminar</button>
                             </div>
                         </div>`;
                     }).join('')}
@@ -3701,10 +3698,10 @@
         } catch(e) { await showMsg('❌ ' + e.message, 'error'); }
     };
 
-    window.adminPagado = async function(uid) {
+    window.adminPagado = async function(uid, username) {
+        if (!await showConfirm('¿Estás seguro que el usuario @' + username + ' pagó la mensualidad?')) return;
         try {
             const token = await getToken();
-            // Buscar el doc del vendedor
             const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -3721,9 +3718,47 @@
                     suscripcionEstado: { stringValue: 'pagado' }
                 }})
             });
-            toast('✅ Timer reiniciado — 5 min nuevos');
+            toast('✅ Pago confirmado — timer reiniciado');
             cargarPanelAdmin();
         } catch(e) { await showMsg('❌ ' + e.message, 'error'); }
+    };
+
+    window.adminEliminarUsuario = async function(uid, username) {
+        if (!await showConfirm('¿Estás seguro que quieres eliminar al usuario @' + username + '?\n\nSe borrarán su cuenta, sus productos y sus fotos.')) return;
+        showLoading();
+        try {
+            const token = await getToken();
+            // Buscar doc del vendedor
+            const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await rList.json();
+            const doc = (data.documents || []).find(d => d.fields?.uid?.stringValue === uid);
+            const docId = doc ? doc.name.split('/').pop() : null;
+
+            // Borrar productos
+            const susProds = tiendasData.filter(t => t.uidVendedor === uid);
+            const publicIds = [];
+            for (const prod of susProds) {
+                (prod.fotos || []).forEach(url => { const pid = cloudinaryPublicId(url); if (pid) publicIds.push(pid); });
+                await fetch(`${FS}/tiendas/${prod.id}?key=${API_KEY}`, {
+                    method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(() => {});
+            }
+            if (publicIds.length) {
+                fetch(`${WORKER}/borrar-fotos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicIds }) }).catch(() => {});
+            }
+            // Borrar doc vendedor
+            if (docId) {
+                await fetch(`${FS}/vendedores/${docId}?key=${API_KEY}`, {
+                    method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(() => {});
+            }
+            tiendasData = tiendasData.filter(t => t.uidVendedor !== uid);
+            hideLoading();
+            toast('✅ Usuario @' + username + ' eliminado');
+            cargarPanelAdmin();
+        } catch(e) { hideLoading(); await showMsg('❌ ' + e.message, 'error'); }
     };
 
     window.adminNota = async function(uid) {
@@ -3890,34 +3925,29 @@
             const estado = f.suscripcionEstado?.stringValue || 'activo';
             const venceStr = f.suscripcionVence?.stringValue;
 
-            // Si ya fue borrado desde otra sesión → ejecutar borrado local
             if (estado === 'borrado') { await ejecutarBorradoLocal(); return; }
-            // Si ya fue bloqueado desde otra sesión → bloquear UI
-            if (estado === 'bloqueado') { ejecutarBloqueoLocal(); return; }
             if (estado === 'pagado') return;
             if (!venceStr) return;
 
             const vence = new Date(venceStr).getTime();
             const ahora = Date.now();
             const docId = doc.name.split('/').pop();
-
-            // Las 3 etapas se calculan hacia atrás desde venceStr (que = registro + 30min)
-            const tRegistro = vence - T_BORRADO_MS; // momento exacto de registro
-            const tBloqueo  = tRegistro + T_BLOQUEO_MS; // registro + 20min
-            const tAviso    = tRegistro + T_AVISO_MS;   // registro + 15min
+            const tRegistro = vence - T_BORRADO_MS;
+            const tBloqueo  = tRegistro + T_BLOQUEO_MS;
+            const tAviso    = tRegistro + T_AVISO_MS;
 
             if (ahora >= vence) {
-                // 30 min → borrar cuenta completa
+                // 30 min → borrar (incluso si ya estaba bloqueado)
                 await borrarCuentaCompleta(docId);
             } else if (ahora >= tBloqueo) {
-                // 20 min → bloquear
-                await bloquearCuenta(docId);
+                // 20 min → bloquear (si aún no está bloqueado)
+                if (estado !== 'bloqueado') await bloquearCuenta(docId);
+                else ejecutarBloqueoLocal(); // ya bloqueado: solo actualizar UI
             } else if (ahora >= tAviso && !_avisoMostrado) {
-                // 15 min → aviso
                 _avisoMostrado = true;
                 const minsRestantes = Math.ceil((vence - ahora) / 60000);
                 await showMsg(
-                    `⚠️ Aviso importante\n\nTe quedan aproximadamente ${minsRestantes} minutos de uso gratuito.\n\nSi no realizas el pago, tu tienda y cuenta serán bloqueadas y luego eliminadas automáticamente.`,
+                    '⚠️ Aviso importante\n\nTe quedan aproximadamente ' + minsRestantes + ' minutos de uso gratuito.\n\nSi no realizas el pago, tu tienda y cuenta serán bloqueadas y luego eliminadas automáticamente.',
                     'warning'
                 );
             }
