@@ -865,14 +865,14 @@
     // SESION (24 horas, sin recargar con VPN)
     // ============================================================
     function restaurarSesion() {
-        const uid = localStorage.getItem('bc_uid');
-        const t = parseInt(localStorage.getItem('bc_t') || '0');
+        const uid = localStorage.getItem('pb_uid');
+        const t = parseInt(localStorage.getItem('pb_t') || '0');
         if (!uid) return;
         if (Date.now() - t > 86400000) { localStorage.clear(); return; }
         usuarioUID = uid;
         actualizarUI(true);
-        const email = localStorage.getItem('bc_e');
-        const pass = localStorage.getItem('bc_p');
+        const email = localStorage.getItem('pb_e');
+        const pass = localStorage.getItem('pb_p');
         if (email && pass) {
             iniciarFB().then(async auth => {
                 try {
@@ -901,9 +901,9 @@
 
     function esAdmin() {
         return usuarioUID === '5M5kT57Pw3OCgRcwL1APkJKd3op2' ||
-               localStorage.getItem('bc_user') === 'norges' ||
-               localStorage.getItem('bc_e') === 'norges763@gmail.com' ||
-               localStorage.getItem('bc_e') === 'norges@bazarcuba.app';
+               localStorage.getItem('pb_user') === 'norges' ||
+               localStorage.getItem('pb_e') === 'norges763@gmail.com' ||
+               localStorage.getItem('pb_e') === 'norges@bazarcuba.app';
     }
 
     function actualizarUI(loggedIn) {
@@ -1076,11 +1076,11 @@
             const auth = await iniciarFB();
             await signInWithEmailAndPassword(auth, email, pass);
             usuarioUID = auth.currentUser.uid;
-            localStorage.setItem('bc_uid', usuarioUID);
-            localStorage.setItem('bc_t', Date.now().toString());
-            localStorage.setItem('bc_e', email);
-            localStorage.setItem('bc_p', pass);
-            localStorage.setItem('bc_user', input);
+            localStorage.setItem('pb_uid', usuarioUID);
+            localStorage.setItem('pb_t', Date.now().toString());
+            localStorage.setItem('pb_e', email);
+            localStorage.setItem('pb_p', pass);
+            localStorage.setItem('pb_user', input);
             actualizarUI(true);
             document.getElementById('auth-container').style.display = 'none';
             document.getElementById('opciones-auth').style.display = 'none';
@@ -1120,11 +1120,11 @@
                 }})
             });
             usuarioUID = cred.user.uid;
-            localStorage.setItem('bc_uid', usuarioUID);
-            localStorage.setItem('bc_t', Date.now().toString());
-            localStorage.setItem('bc_e', email);
-            localStorage.setItem('bc_p', pass);
-            localStorage.setItem('bc_user', username);
+            localStorage.setItem('pb_uid', usuarioUID);
+            localStorage.setItem('pb_t', Date.now().toString());
+            localStorage.setItem('pb_e', email);
+            localStorage.setItem('pb_p', pass);
+            localStorage.setItem('pb_user', username);
             actualizarUI(true);
             document.getElementById('auth-container').style.display = 'none';
             document.getElementById('opciones-auth').style.display = 'none';
@@ -1147,7 +1147,7 @@
     let _verificacionInterval = null;
 
     window.mostrarBannerVerificacion = function(email) {
-        document.getElementById('banner-verif-email').textContent = email || localStorage.getItem('bc_e') || '';
+        document.getElementById('banner-verif-email').textContent = email || localStorage.getItem('pb_e') || '';
         document.getElementById('banner-verificacion').classList.add('show');
         lockScroll();
         if (_verificacionInterval) clearInterval(_verificacionInterval);
@@ -1156,8 +1156,8 @@
             try {
                 const { signInWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
                 const auth = await iniciarFB();
-                const em = localStorage.getItem('bc_e');
-                const pw = localStorage.getItem('bc_p');
+                const em = localStorage.getItem('pb_e');
+                const pw = localStorage.getItem('pb_p');
                 if (!em || !pw) return;
 
                 // Si no hay sesión activa, iniciar en background para verificar
@@ -1173,8 +1173,8 @@
                     localStorage.removeItem('bc_unverified');
                     localStorage.setItem('bc_verificado', auth.currentUser.uid); // flag permanente
                     usuarioUID = auth.currentUser.uid;
-                    localStorage.setItem('bc_uid', usuarioUID);
-                    localStorage.setItem('bc_t', Date.now().toString());
+                    localStorage.setItem('pb_uid', usuarioUID);
+                    localStorage.setItem('pb_t', Date.now().toString());
                     actualizarUI(true);
                     document.getElementById('banner-verificacion').classList.remove('show');
                     unlockScroll();
@@ -1188,8 +1188,8 @@
         try {
             const { signInWithEmailAndPassword, sendEmailVerification } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
             const auth = await iniciarFB();
-            const em = localStorage.getItem('bc_e');
-            const pw = localStorage.getItem('bc_p');
+            const em = localStorage.getItem('pb_e');
+            const pw = localStorage.getItem('pb_p');
             if (!em || !pw) { toast('❌ Activa el VPN para reenviar.'); return; }
             if (!auth.currentUser) await signInWithEmailAndPassword(auth, em, pw);
             auth.languageCode = 'es';
@@ -1201,9 +1201,9 @@
     window.cerrarSesion = function() {
         if (_verificacionInterval) { clearInterval(_verificacionInterval); _verificacionInterval = null; }
         usuarioUID = null; fbAuth = null; fbApp = null;
-        localStorage.removeItem('bc_uid'); localStorage.removeItem('bc_t');
-        localStorage.removeItem('bc_e'); localStorage.removeItem('bc_p');
-        localStorage.removeItem('bc_user');
+        localStorage.removeItem('pb_uid'); localStorage.removeItem('pb_t');
+        localStorage.removeItem('pb_e'); localStorage.removeItem('pb_p');
+        localStorage.removeItem('pb_user');
         unlockScroll();
         actualizarUI(false);
         document.getElementById('panelVendedor').style.display = 'none';
@@ -2540,17 +2540,17 @@
     // CARGAR DATOS
     // ============================================================
     function guardarCambioLocal(id, cambios) {
-        const locales = JSON.parse(localStorage.getItem('bc_cambios') || '{}');
+        const locales = JSON.parse(localStorage.getItem('pb_cambios') || '{}');
         if (cambios === null) {
             locales[id] = { _eliminado: true };
         } else {
             locales[id] = Object.assign(locales[id] || {}, cambios);
         }
-        localStorage.setItem('bc_cambios', JSON.stringify(locales));
+        localStorage.setItem('pb_cambios', JSON.stringify(locales));
     }
 
     function aplicarCambiosLocales(lista) {
-        const locales = JSON.parse(localStorage.getItem('bc_cambios') || '{}');
+        const locales = JSON.parse(localStorage.getItem('pb_cambios') || '{}');
         if (!Object.keys(locales).length) return lista;
         return lista
             .filter(t => !locales[t.id]?._eliminado)
@@ -2558,13 +2558,13 @@
     }
 
     function agregarProductoLocal(producto) {
-        const locales = JSON.parse(localStorage.getItem('bc_nuevos') || '[]');
+        const locales = JSON.parse(localStorage.getItem('pb_nuevos') || '[]');
         locales.push(producto);
-        localStorage.setItem('bc_nuevos', JSON.stringify(locales));
+        localStorage.setItem('pb_nuevos', JSON.stringify(locales));
     }
 
     function obtenerNuevosLocales() {
-        return JSON.parse(localStorage.getItem('bc_nuevos') || '[]');
+        return JSON.parse(localStorage.getItem('pb_nuevos') || '[]');
     }
 
     async function cargarDatos() {
@@ -2670,8 +2670,8 @@
     }
 
     function limpiarLocalesObsoletos(listaFinal, docsOriginales) {
-        const locales = JSON.parse(localStorage.getItem('bc_cambios') || '{}');
-        const nuevos = JSON.parse(localStorage.getItem('bc_nuevos') || '[]');
+        const locales = JSON.parse(localStorage.getItem('pb_cambios') || '{}');
+        const nuevos = JSON.parse(localStorage.getItem('pb_nuevos') || '[]');
         const idsEnServer = new Set(docsOriginales.map(d => d.name.split('/').pop()));
 
         let hayLocales = false;
@@ -2695,8 +2695,8 @@
 
         const nuevosActualizados = nuevos.filter(n => !idsEnServer.has(n.id));
 
-        localStorage.setItem('bc_cambios', JSON.stringify(locales));
-        localStorage.setItem('bc_nuevos', JSON.stringify(nuevosActualizados));
+        localStorage.setItem('pb_cambios', JSON.stringify(locales));
+        localStorage.setItem('pb_nuevos', JSON.stringify(nuevosActualizados));
     }
 
     // Mezclar array aleatoriamente (Fisher-Yates)
@@ -3294,10 +3294,10 @@
     // ============================================================
     // CARRITO
     // ============================================================
-    let carrito = JSON.parse(sessionStorage.getItem('bc_carrito') || '[]');
+    let carrito = JSON.parse(sessionStorage.getItem('pb_carrito') || '[]');
 
     function guardarCarrito() {
-        sessionStorage.setItem('bc_carrito', JSON.stringify(carrito));
+        sessionStorage.setItem('pb_carrito', JSON.stringify(carrito));
     }
 
     function actualizarBadge() {
@@ -4010,7 +4010,7 @@
         }
     }, 3 * 60 * 1000);
 
-    const _uid = localStorage.getItem('bc_uid');
+    const _uid = localStorage.getItem('pb_uid');
     if (_uid) {
         cargarVistas(_uid);
     }
