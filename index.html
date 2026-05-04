@@ -1125,6 +1125,9 @@
             localStorage.setItem('pb_e', email);
             localStorage.setItem('pb_p', pass);
             localStorage.setItem('pb_user', username);
+            // FIX: guardar timer de prueba localmente (no requiere VPN)
+            localStorage.setItem('pb_trial_vence', (Date.now() + T_BORRADO_MS).toString());
+            localStorage.setItem('pb_trial_start', Date.now().toString());
             actualizarUI(true);
             document.getElementById('auth-container').style.display = 'none';
             document.getElementById('opciones-auth').style.display = 'none';
@@ -3728,38 +3731,46 @@
         showLoading();
         try {
             const token = await getToken();
-            // Buscar doc del vendedor
-            const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            // 1. Buscar doc del vendedor
+            const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!rList.ok) throw new Error('No se pudo cargar la lista de usuarios (HTTP ' + rList.status + ').');
             const data = await rList.json();
             const doc = (data.documents || []).find(d => d.fields?.uid?.stringValue === uid);
             const docId = doc ? doc.name.split('/').pop() : null;
-
-            // Borrar productos
+            // 2. Borrar productos (chequeando cada respuesta HTTP)
             const susProds = tiendasData.filter(t => t.uidVendedor === uid);
             const publicIds = [];
+            let fallosFirestore = 0;
             for (const prod of susProds) {
                 (prod.fotos || []).forEach(url => { const pid = cloudinaryPublicId(url); if (pid) publicIds.push(pid); });
-                await fetch(`${FS}/tiendas/${prod.id}?key=${API_KEY}`, {
-                    method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` }
-                }).catch(() => {});
+                const rDel = await fetch(`${FS}/tiendas/${prod.id}?key=${API_KEY}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+                if (!rDel.ok && rDel.status !== 404) fallosFirestore++;
             }
-            if (publicIds.length) {
-                fetch(`${WORKER}/borrar-fotos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicIds }) }).catch(() => {});
-            }
-            // Borrar doc vendedor
+            // 3. Borrar fotos Cloudinary (background)
+            if (publicIds.length) fetch(`${WORKER}/borrar-fotos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicIds }) }).catch(() => {});
+            // 4. Borrar doc vendedor (si reglas bloquean, marcar como borrado)
             if (docId) {
-                await fetch(`${FS}/vendedores/${docId}?key=${API_KEY}`, {
-                    method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` }
-                }).catch(() => {});
+                const rVend = await fetch(`${FS}/vendedores/${docId}?key=${API_KEY}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+                if (!rVend.ok && rVend.status !== 404) {
+                    // reglas de Firestore bloquean la eliminación directa → marcar como borrado
+                    await fetch(`${FS}/vendedores/${docId}?updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ fields: { suscripcionEstado: { stringValue: 'borrado' } } }) }).catch(() => {});
+                }
             }
+            // 5. Actualizar estado local
             tiendasData = tiendasData.filter(t => t.uidVendedor !== uid);
-            renderizar(tiendasData);
-            hideLoading();
-            toast('✅ Usuario @' + username + ' eliminado');
+            renderizar(tiendasData); hideLoading();
+            if (fallosFirestore > 0) {
+                await showMsg('⚠️ @' + username + ' marcado como eliminado.\n\n' + fallosFirestore + ' producto(s) no pudieron borrarse de Firestore.\n\n→ Actualiza las reglas de Firestore para que el admin pueda borrar documentos ajenos.', 'warning');
+            } else {
+                await showMsg('✅ Usuario @' + username + ' eliminado correctamente.', 'ok');
+            }
+            fetch(`${WORKER}/borrar-usuario-auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uid })
+            }).catch(() => {});
             cargarPanelAdmin();
-        } catch(e) { hideLoading(); await showMsg('❌ ' + e.message, 'error'); }
+        } catch(e) { hideLoading(); await msgError(e); }
     };
 
     window.adminNota = async function(uid) {
@@ -3913,6 +3924,48 @@
     async function verificarSuscripcion() {
         if (!usuarioUID) return;
         if (esAdmin()) return;
+
+        const ahora = Date.now();
+
+        // FIX: verificación LOCAL sin Firebase ni VPN ─────────────────────────
+        const venceLocal = parseInt(localStorage.getItem('pb_trial_vence') || '0');
+        if (venceLocal > 0) {
+            const trialStart = venceLocal - T_BORRADO_MS;
+            if (ahora >= venceLocal) {
+                await ejecutarBorradoCompleto(); return; // 30 min: borrar
+            }
+            if (ahora >= trialStart + T_BLOQUEO_MS) {
+                ejecutarBloqueoLocal(); // 20 min: bloquear UI
+                // actualizar servidor en background (silencioso si no hay VPN)
+                try {
+                    const token = await getToken();
+                    const rL = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, { headers: { 'Authorization': `Bearer ${token}` } });
+                    if (rL.ok) {
+                        const d2 = await rL.json();
+                        const docB = (d2.documents || []).find(d => d.fields?.uid?.stringValue === usuarioUID);
+                        if (docB && docB.fields?.suscripcionEstado?.stringValue !== 'bloqueado') {
+                            await fetch(`${FS}/vendedores/${docB.name.split('/').pop()}?updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ fields: { suscripcionEstado: { stringValue: 'bloqueado' } } })
+                            });
+                        }
+                    }
+                } catch(e) { /* sin VPN, silencioso */ }
+                return;
+            }
+            if (ahora >= trialStart + T_AVISO_MS && !_avisoMostrado) {
+                _avisoMostrado = true;
+                const minsRestantes = Math.ceil((venceLocal - ahora) / 60000);
+                await showMsg(
+                    '⚠️ Aviso importante\n\nTe quedan aproximadamente ' + minsRestantes + ' minutos de uso gratuito.\n\nSi no realizas el pago, tu tienda y cuenta serán bloqueadas y luego eliminadas automáticamente.',
+                    'warning'
+                );
+            }
+            return; // timer local OK
+        }
+
+        // fallback: verificación en servidor (si no hay timer local)
         try {
             const token = await getToken();
             const rList = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, {
@@ -3925,26 +3978,18 @@
             const f = doc.fields || {};
             const estado = f.suscripcionEstado?.stringValue || 'activo';
             const venceStr = f.suscripcionVence?.stringValue;
-
             if (estado === 'borrado') { await ejecutarBorradoLocal(); return; }
             if (estado === 'pagado') return;
             if (!venceStr) return;
-
             const vence = new Date(venceStr).getTime();
-            const ahora = Date.now();
-            const docId = doc.name.split('/').pop();
-            const tRegistro = vence - T_BORRADO_MS;
-            const tBloqueo  = tRegistro + T_BLOQUEO_MS;
-            const tAviso    = tRegistro + T_AVISO_MS;
-
+            localStorage.setItem('pb_trial_vence', vence.toString()); // sincronizar
             if (ahora >= vence) {
-                // 30 min → borrar (incluso si ya estaba bloqueado)
-                await borrarCuentaCompleta(docId);
-            } else if (ahora >= tBloqueo) {
-                // 20 min → bloquear (si aún no está bloqueado)
+                await ejecutarBorradoCompleto();
+            } else if (ahora >= vence - (T_BORRADO_MS - T_BLOQUEO_MS)) {
+                const docId = doc.name.split('/').pop();
                 if (estado !== 'bloqueado') await bloquearCuenta(docId);
-                else ejecutarBloqueoLocal(); // ya bloqueado: solo actualizar UI
-            } else if (ahora >= tAviso && !_avisoMostrado) {
+                else ejecutarBloqueoLocal();
+            } else if (ahora >= vence - (T_BORRADO_MS - T_AVISO_MS) && !_avisoMostrado) {
                 _avisoMostrado = true;
                 const minsRestantes = Math.ceil((vence - ahora) / 60000);
                 await showMsg(
@@ -3952,7 +3997,7 @@
                     'warning'
                 );
             }
-        } catch(e) { console.error('verificarSuscripcion:', e); }
+        } catch(e) { /* sin VPN, silencioso */ }
     }
 
     async function bloquearCuenta(vendedorDocId) {
@@ -3979,51 +4024,62 @@
         }
     }
 
-    async function borrarCuentaCompleta(vendedorDocId) {
+    async function ejecutarBorradoCompleto() {
+        clearInterval(_suscripcionInterval);
+        localStorage.removeItem('pb_trial_vence');
+        localStorage.removeItem('pb_trial_start');
         try {
-            clearInterval(_suscripcionInterval);
-            const token = await getToken();
-            const misProds = tiendasData.filter(t => t.uidVendedor === usuarioUID);
-            const publicIds = [];
-            for (const prod of misProds) {
-                (prod.fotos || []).forEach(url => { const pid = cloudinaryPublicId(url); if (pid) publicIds.push(pid); });
-                await fetch(`${FS}/tiendas/${prod.id}?key=${API_KEY}`, {
-                    method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` }
-                }).catch(() => {});
-            }
-            if (publicIds.length) {
-                fetch(`${WORKER}/borrar-fotos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicIds }) }).catch(() => {});
-            }
-            if (vendedorDocId) {
-                await fetch(`${FS}/vendedores/${vendedorDocId}?updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                    body: JSON.stringify({ fields: { suscripcionEstado: { stringValue: 'borrado' } } })
-                }).catch(() => {});
-            }
-            try {
-                const auth = await iniciarFB();
-                if (auth.currentUser) {
-                    const { deleteUser } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
-                    await deleteUser(auth.currentUser);
+            const auth = fbAuth || await iniciarFB().catch(() => null);
+            if (auth && auth.currentUser) {
+                const token = await auth.currentUser.getIdToken(true);
+                const misProds = tiendasData.filter(t => t.uidVendedor === usuarioUID);
+                const publicIds = [];
+                for (const prod of misProds) {
+                    (prod.fotos || []).forEach(url => { const pid = cloudinaryPublicId(url); if (pid) publicIds.push(pid); });
+                    await fetch(`${FS}/tiendas/${prod.id}?key=${API_KEY}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
                 }
-            } catch(e) {}
-            await ejecutarBorradoLocal();
-        } catch(e) { console.error('borrarCuentaCompleta:', e); }
+                if (publicIds.length) fetch(`${WORKER}/borrar-fotos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicIds }) }).catch(() => {});
+                const rL = await fetch(`${FS}/vendedores?key=${API_KEY}&pageSize=300`, { headers: { 'Authorization': `Bearer ${token}` } }).catch(() => null);
+                if (rL && rL.ok) {
+                    const d2 = await rL.json();
+                    const docV = (d2.documents || []).find(d => d.fields?.uid?.stringValue === usuarioUID);
+                    if (docV) await fetch(`${FS}/vendedores/${docV.name.split('/').pop()}?updateMask.fieldPaths=suscripcionEstado&key=${API_KEY}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ fields: { suscripcionEstado: { stringValue: 'borrado' } } }) }).catch(() => {});
+                }
+                try { const { deleteUser } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"); await deleteUser(auth.currentUser); } catch(e) {}
+            }
+        } catch(e) { console.warn('Sin VPN:', e.message); }
+        fetch(`${WORKER}/borrar-usuario-auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: usuarioUID })
+        }).catch(() => {});
+        await ejecutarBorradoLocal();
     }
 
-    async function ejecutarBorradoLocal() {
-        clearInterval(_suscripcionInterval);
+    async function borrarCuentaCompleta(vendedorDocId) { await ejecutarBorradoCompleto(); }
+
+    
+/**
+ * FUNCIÓN CRÍTICA: ejecutarBorradoLocal (Insertada automáticamente)
+ * Esta función es necesaria para evitar el crash en el borrado automático.
+ */
+async function ejecutarBorradoLocal() {
+    if (typeof _suscripcionInterval !== 'undefined') clearInterval(_suscripcionInterval);
+    if (typeof tiendasData !== 'undefined' && typeof usuarioUID !== 'undefined') {
         tiendasData = tiendasData.filter(t => t.uidVendedor !== usuarioUID);
-        renderizar(tiendasData);
-        document.getElementById('panelVendedor').style.display = 'none';
-        localStorage.clear();
-        usuarioUID = null;
-        actualizarUI(false);
+    }
+    if (typeof renderizar === 'function') renderizar(tiendasData);
+    const panelVendedor = document.getElementById('panelVendedor');
+    if (panelVendedor) panelVendedor.style.display = 'none';
+    localStorage.clear();
+    usuarioUID = null;
+    if (typeof actualizarUI === 'function') actualizarUI(false);
+    if (typeof showMsg === 'function') {
         await showMsg('🚫 Cuenta eliminada\n\nTu período de prueba ha finalizado y tu cuenta fue eliminada por falta de pago.\n\nPuedes crear una nueva cuenta cuando desees.', 'error');
     }
+}
 
-    function iniciarCheckSuscripcion() {
+function iniciarCheckSuscripcion() {
         if (_suscripcionInterval) clearInterval(_suscripcionInterval);
         _avisoMostrado = false;
         verificarSuscripcion();
