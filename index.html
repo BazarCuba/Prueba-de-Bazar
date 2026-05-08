@@ -491,7 +491,10 @@
     <div id="auth-container" style="display:none;margin-top:20px;border:1.5px solid #ddd;padding:15px;border-radius:10px;">
         <h3 id="auth-title" style="margin-top:0;font-size:16px;color:#0056b3;"></h3>
         <p style="font-size:12px;color:#e65100;margin:0 0 10px;">⚠️ Necesitas VPN activado para esta acción</p>
-        <input type="text" id="auth-email" placeholder="Nombre de usuario" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:8px;margin-bottom:10px;font-size:14px;" autocomplete="off" autocorrect="off" autocapitalize="off">
+        <input type="email" id="auth-email" placeholder="Tu Gmail (ejemplo@gmail.com)" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:8px;margin-bottom:10px;font-size:14px;" autocomplete="off" autocorrect="off" autocapitalize="off">
+        <div id="campo-nombre-tienda" style="display:none;margin-bottom:10px;">
+            <input type="text" id="auth-nombre-tienda" placeholder="Nombre de tu tienda (visible al publico)" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;">
+        </div>
         <div id="campo-telefono" style="display:none;margin-bottom:10px;">
             <input type="tel" id="auth-tel" placeholder="Teléfono (+53 51234567)" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;">
         </div>
@@ -500,6 +503,7 @@
             <button type="button" onclick="const i=document.getElementById('auth-pass');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'👁️':'🙈'" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:18px;padding:0;line-height:1;">👁️</button>
         </div>
         <button id="btn-auth-accion" onclick="ejecutarAuth()" style="width:100%;margin-top:12px;padding:11px;background:linear-gradient(135deg,#0056b3,#003d82);color:white;border:none;border-radius:8px;font-weight:bold;cursor:pointer;font-size:15px;">Continuar</button>
+        <button id="btn-olvide" onclick="olvideMiContrasena()" style="display:none;width:100%;margin-top:8px;padding:9px;background:none;border:none;color:#0056b3;font-size:13px;cursor:pointer;text-decoration:underline;">Olvide mi contrasena</button>
     </div>
 </div>
 
@@ -807,12 +811,8 @@
         document.getElementById('lightbox-img').src = lbFotos[lbIdx];
         document.getElementById('lightbox').classList.add('active');
         lockScroll(); // bloquear scroll del fondo
-        const prev = document.getElementById('lightbox-prev');
-        const next = document.getElementById('lightbox-next');
         const counter = document.getElementById('lightbox-counter');
         const multi = lbFotos.length > 1;
-        prev.style.display = multi ? 'block' : 'none';
-        next.style.display = multi ? 'block' : 'none';
         counter.style.display = multi ? 'block' : 'none';
         if (multi) counter.textContent = `${lbIdx+1} / ${lbFotos.length}`;
     };
@@ -900,10 +900,10 @@
     }
 
     function esAdmin() {
-        return usuarioUID === '5M5kT57Pw3OCgRcwL1APkJKd3op2' ||
-               localStorage.getItem('pb_user') === 'norges' ||
-               localStorage.getItem('pb_e') === 'norges763@gmail.com' ||
-               localStorage.getItem('pb_e') === 'norges@bazarcuba.app';
+        const adminUIDs = ['5M5kT57Pw3OCgRcwL1APkJKd3op2'];
+        const adminGmails = ['norges763@gmail.com'];
+        return adminUIDs.includes(usuarioUID) ||
+               adminGmails.includes(localStorage.getItem('pb_e'));
     }
 
     function actualizarUI(loggedIn) {
@@ -1054,8 +1054,10 @@
         document.getElementById('auth-container').style.display = 'block';
         document.getElementById('auth-title').innerText = tipo === 'login' ? 'Iniciar Sesión' : 'Crear Cuenta';
         document.getElementById('btn-auth-accion').innerText = tipo === 'login' ? 'Entrar' : 'Registrarse';
-        document.getElementById('auth-email').placeholder = tipo === 'login' ? 'Nombre de usuario' : 'Elige un nombre de usuario';
-        document.getElementById('campo-telefono').style.display = 'none'; // nunca se muestra
+        document.getElementById('auth-email').placeholder = 'Tu Gmail (ejemplo@gmail.com)';
+        document.getElementById('campo-nombre-tienda').style.display = tipo === 'registro' ? 'block' : 'none';
+        const btnOlv = document.getElementById('btn-olvide'); if (btnOlv) btnOlv.style.display = tipo === 'login' ? 'block' : 'none';
+        document.getElementById('campo-telefono').style.display = 'none';
     };
 
     window.ejecutarAuth = function() {
@@ -1068,9 +1070,9 @@
         const pass = document.getElementById('auth-pass').value;
         const btn = document.getElementById('btn-auth-accion');
         if (!input || !pass) { await showMsg('Completa todos los campos.', 'warning'); return; }
+        if (!input.includes('@')) { await showMsg('Escribe tu Gmail completo (ejemplo@gmail.com).', 'warning'); btn.innerText = 'Continuar'; btn.disabled = false; return; }
         btn.innerText = 'Conectando...'; btn.disabled = true;
-        // Si contiene @ es un correo real, si no es username@prueba-de-bazar.app
-        const email = input.includes('@') ? input : input.toLowerCase().replace(/\s+/g,'') + '@prueba-de-bazar.app';
+        const email = input;
         try {
             const { signInWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
             const auth = await iniciarFB();
@@ -1096,54 +1098,67 @@
     };
 
     window.hacerRegistro = async function() {
-        const username = document.getElementById('auth-email').value.trim().toLowerCase().replace(/\s+/g,'');
+        const gmail = document.getElementById('auth-email').value.trim().toLowerCase();
+        const nombreTienda = document.getElementById('auth-nombre-tienda') ? document.getElementById('auth-nombre-tienda').value.trim() : '';
         const pass = document.getElementById('auth-pass').value;
-        if (!username || !pass) { await showMsg('Completa todos los campos.', 'warning'); return; }
-        if (username.length < 4) { await showMsg('El nombre de usuario debe tener al menos 4 caracteres.', 'warning'); return; }
-        if (!/^[a-z0-9._]+$/.test(username)) { await showMsg('Solo letras, números, puntos y guiones bajos.', 'warning'); return; }
-        if (pass.length < 6) { await showMsg('La contraseña debe tener al menos 6 caracteres.', 'warning'); return; }
+        if (!gmail || !pass) { await showMsg('Completa todos los campos.', 'warning'); return; }
+        if (!gmail.includes('@')) { await showMsg('Escribe tu Gmail completo (ejemplo@gmail.com).', 'warning'); return; }
+        if (!nombreTienda) { await showMsg('Escribe el nombre de tu tienda.', 'warning'); return; }
+        if (pass.length < 6) { await showMsg('La contrasena debe tener al menos 6 caracteres.', 'warning'); return; }
         const btn = document.getElementById('btn-auth-accion');
         btn.innerText = 'Creando cuenta...'; btn.disabled = true;
-        const email = username + '@prueba-de-bazar.app';
         try {
             const { createUserWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
             const auth = await iniciarFB();
-            const cred = await createUserWithEmailAndPassword(auth, email, pass);
+            const cred = await createUserWithEmailAndPassword(auth, gmail, pass);
             const token = await auth.currentUser.getIdToken();
             await fetch(`${FS}/vendedores?key=${API_KEY}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ fields: {
                     uid: { stringValue: cred.user.uid },
-                    username: { stringValue: username },
+                    gmail: { stringValue: gmail },
+                    nombreTienda: { stringValue: nombreTienda },
                     fecha: { timestampValue: new Date().toISOString() }
                 }})
             });
             usuarioUID = cred.user.uid;
             localStorage.setItem('pb_uid', usuarioUID);
             localStorage.setItem('pb_t', Date.now().toString());
-            localStorage.setItem('pb_e', email);
+            localStorage.setItem('pb_e', gmail);
             localStorage.setItem('pb_p', pass);
-            localStorage.setItem('pb_user', username);
-            // FIX: guardar timer de prueba localmente (no requiere VPN)
+            localStorage.setItem('pb_user', nombreTienda);
             localStorage.setItem('pb_trial_vence', (Date.now() + T_BORRADO_MS).toString());
             localStorage.setItem('pb_trial_start', Date.now().toString());
             actualizarUI(true);
             document.getElementById('auth-container').style.display = 'none';
             document.getElementById('opciones-auth').style.display = 'none';
             toggleMenu();
-            // Iniciar timer de suscripción y mostrar bienvenida
             await iniciarTimerSuscripcion(usuarioUID);
             document.getElementById('modal-bienvenida').style.display = 'flex';
             iniciarCheckSuscripcion();
             renderizar(tiendasData);
         } catch(e) {
             let msg = 'No se pudo crear la cuenta. ';
-            if (e.code === 'auth/email-already-in-use') msg = 'Ese nombre de usuario ya está en uso. Elige otro.';
-            else if (e.code === 'auth/invalid-email') msg = 'Nombre de usuario no válido.';
-            else msg += 'Verifica tu VPN y vuelve a intentarlo.';
+            if (e.code === 'auth/email-already-in-use') msg = 'Ese Gmail ya esta registrado. Inicia sesion o usa otro Gmail.';
+            else if (e.code === 'auth/invalid-email') msg = 'Gmail no valido.';
+            else msg += 'Verifica tu VPN e intentalo de nuevo.';
             await showMsg(msg, 'error');
             btn.innerText = 'Registrarse'; btn.disabled = false;
+        }
+    };
+
+    window.olvideMiContrasena = async function() {
+        const gmail = document.getElementById('auth-email').value.trim().toLowerCase();
+        if (!gmail || !gmail.includes('@')) { await showMsg('Escribe tu Gmail primero y luego pulsa este boton.', 'warning'); return; }
+        try {
+            const { sendPasswordResetEmail } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js");
+            const auth = await iniciarFB();
+            await sendPasswordResetEmail(auth, gmail);
+            await showMsg('Correo enviado a ' + gmail + '.\n\nRevisa tu Gmail y sigue las instrucciones.\nRecuerda tener el VPN activo para abrir el enlace.', 'ok');
+        } catch(e) {
+            if (e.code === 'auth/user-not-found') await showMsg('No existe una cuenta con ese Gmail.', 'warning');
+            else await showMsg('No se pudo enviar el correo. Activa el VPN e intenta de nuevo.', 'error');
         }
     };
 
@@ -2150,7 +2165,7 @@
             if (ctrlForm) ctrlForm.style.display = 'none';
             if (ctrlFin) ctrlFin.style.display = 'none';
             document.getElementById('form-nuevo-producto').style.display = 'none';
-            document.getElementById('form-nueva-coleccion').style.display = 'none';
+            const fColec = document.getElementById('form-nueva-coleccion'); if (fColec) fColec.style.display = 'none';
             renderizarMisProductos([]);
         }
     };
@@ -3576,8 +3591,8 @@
                     const f = doc.fields || {};
                     return {
                         uid: f.uid?.stringValue || doc.name.split('/').pop(),
-                        username: f.username?.stringValue || f.email?.stringValue || '(sin usuario)',
-                        email: f.email?.stringValue || '',
+                        username: f.nombreTienda?.stringValue || f.username?.stringValue || '(sin nombre)',
+                        gmail: f.gmail?.stringValue || f.email?.stringValue || '',
                         tel: f.tel?.stringValue || '',
                         fecha: f.fecha?.timestampValue || ''
                     };
@@ -3645,11 +3660,11 @@
                         const fechaStr = v.fecha ? new Date(v.fecha).toLocaleDateString('es-ES') : '';
                         return `<div class="admin-vendedor">
                             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
-                                <div class="admin-vendedor-nombre">@${v.username}</div>
+                                <div class="admin-vendedor-nombre">${v.username}</div>
                                 <span class="${badgeClass}">${badgeText}</span>
                             </div>
                             <div class="admin-vendedor-info">
-                                ${v.tel ? '📞 '+v.tel+'  ' : ''}
+                                ${v.gmail ? '📧 '+v.gmail+'<br>' : ''}${v.tel ? '📞 '+v.tel+'  ' : ''}
                                 📦 ${nProds} producto${nProds!==1?'s':''}
                                 ${fechaStr ? '  📅 Registrado: '+fechaStr : ''}
                                 ${sus.vencimiento ? '<br>⏰ Vence: '+sus.vencimiento : ''}
